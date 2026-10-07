@@ -20,6 +20,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import sqltypes
 
 from metadata.profiler.orm.functions.modulo import ModuloFn
+from metadata.profiler.orm.functions.length import LenFn
 from metadata.profiler.orm.functions.random_num import RandomNumFn
 
 EXCLUDED_SCHEMAS = frozenset(
@@ -46,6 +47,12 @@ def compile_kingbase_modulo(element, compiler, **kwargs):
         raise ValueError("We need two elements to compute the modulo")
     value, base = [compiler.process(part, **kwargs) for part in element.clauses]
     return f"MOD({value}, {base})"
+
+
+@compiles(LenFn, "kingbase8")
+def compile_kingbase_length(element, compiler, **kwargs):
+    value = compiler.process(element.clauses, **kwargs)
+    return f"LENGTH(CAST({value} AS TEXT))"
 
 
 def _parse_kingbase_length(raw: str | None) -> int | None:

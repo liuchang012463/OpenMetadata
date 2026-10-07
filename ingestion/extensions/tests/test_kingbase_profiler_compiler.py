@@ -1,7 +1,8 @@
-from sqlalchemy import func
+from sqlalchemy import column, func
 from sqlalchemy.dialects import registry
 
 import kingbase_connector.kingbase_dialect  # noqa: F401
+from metadata.profiler.orm.functions.length import LenFn
 from metadata.profiler.orm.functions.modulo import ModuloFn
 from metadata.profiler.orm.functions.random_num import RandomNumFn
 
@@ -30,3 +31,11 @@ def test_kingbase_sampler_compiles_count_denominator():
 
     assert compiled == "MOD(ABS((RANDOM() * 100)::INTEGER), COUNT(*))"
     assert "%%" not in compiled
+
+
+def test_kingbase_text_length_compiles_to_length_function():
+    expression = LenFn(column("device_code"))
+
+    compiled = str(expression.compile(dialect=_load_kingbase_dialect())).upper()
+
+    assert compiled == "LENGTH(CAST(DEVICE_CODE AS TEXT))"
