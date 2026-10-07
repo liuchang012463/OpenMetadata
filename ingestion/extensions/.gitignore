@@ -1,0 +1,4 @@
+drivers/*.jar
+drivers/**/*.jar
+__pycache__/
+*.py[cod]
