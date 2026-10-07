@@ -16,7 +16,11 @@ from sqlalchemy import sql
 from sqlalchemy.dialects import registry
 from sqlalchemy.engine import reflection
 from sqlalchemy.engine.default import DefaultDialect
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import sqltypes
+
+from metadata.profiler.orm.functions.modulo import ModuloFn
+from metadata.profiler.orm.functions.random_num import RandomNumFn
 
 EXCLUDED_SCHEMAS = frozenset(
     {
@@ -29,6 +33,19 @@ EXCLUDED_SCHEMAS = frozenset(
         "pg_toast_temp_1",
     }
 )
+
+
+@compiles(RandomNumFn, "kingbase8")
+def compile_kingbase_random_num(elements, compiler, **kwargs):
+    return "ABS((RANDOM() * 100)::INTEGER)"
+
+
+@compiles(ModuloFn, "kingbase8")
+def compile_kingbase_modulo(element, compiler, **kwargs):
+    if len(element.clauses) != 2:
+        raise ValueError("We need two elements to compute the modulo")
+    value, base = [compiler.process(part, **kwargs) for part in element.clauses]
+    return f"MOD({value}, {base})"
 
 
 def _parse_kingbase_length(raw: str | None) -> int | None:
@@ -211,6 +228,7 @@ def get_table_comment(self, connection, table_name, schema=None, **kw):
 
 class KingbaseDialect(DefaultDialect):
     name = "kingbase8"
+    default_paramstyle = "qmark"
     supports_statement_cache = True
     supports_alter = True
     supports_pk_autoincrement = True
