@@ -16,9 +16,25 @@ from sqlalchemy.engine import reflection
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import CompileError
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql import sqltypes
 
 from metadata.profiler.orm.functions.median import MedianFn
+from metadata.profiler.orm.functions.modulo import ModuloFn
+from metadata.profiler.orm.functions.random_num import RandomNumFn
+
+
+@compiles(RandomNumFn, "dm")
+def compile_dameng_random_num(elements, compiler, **kwargs):
+    """Use Dameng's RAND() function for randomized profiler sampling."""
+    return "ABS(RAND()) * 100"
+
+
+@compiles(ModuloFn, "dm")
+def compile_dameng_modulo(elements, compiler, **kwargs):
+    """Compile modulo through Dameng's MOD function."""
+    left, right = [compiler.process(element, **kwargs) for element in elements.clauses]
+    return f"MOD({left}, {right})"
 
 
 @compiles(MedianFn, "dm")
@@ -211,8 +227,32 @@ def get_table_comment(self, connection, table_name, schema=None, **kw):
     return {"text": row[0] if row else None}
 
 
+class DamengSQLCompiler(SQLCompiler):
+    """Compile SQLAlchemy row limits using Dameng's SQL syntax."""
+
+    def limit_clause(self, select, **kwargs):
+        text = ""
+        limit_clause = select._limit_clause
+        offset_clause = select._offset_clause
+
+        if offset_clause is not None:
+            if not select._simple_int_clause(offset_clause):
+                raise CompileError("Dameng only supports simple integer OFFSET values")
+            offset = self.process(offset_clause.render_literal_execute(), **kwargs)
+            text += f"\n OFFSET {offset} ROWS"
+
+        if limit_clause is not None:
+            if not select._simple_int_clause(limit_clause):
+                raise CompileError("Dameng only supports simple integer LIMIT values")
+            limit = self.process(limit_clause.render_literal_execute(), **kwargs)
+            text += f"\n FETCH FIRST {limit} ROWS ONLY"
+
+        return text
+
+
 class DamengDialect(DefaultDialect):
     name = "dm"
+    statement_compiler = DamengSQLCompiler
     supports_statement_cache = True
     supports_alter = True
     supports_pk_autoincrement = True
