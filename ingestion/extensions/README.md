@@ -1,15 +1,16 @@
-# OpenMetadata 2.0.4 database extensions
+# OpenMetadata 2.0.4 ingestion extensions
 
-This directory is the source of the Kingbase, Dameng, and Vastbase ingestion
-extensions. It is based on the official OpenMetadata `2.0.4-release` tag
-and uses its existing `CustomDatabase` connection type; no schema fork is
-needed.
+This directory is the source of the Kingbase, Dameng, Vastbase, and FTP
+ingestion extensions. It is based on the official OpenMetadata `2.0.4-release`
+tag and uses the existing `CustomDatabase` / `CustomDrive` connection types; no
+schema fork is needed.
 
-| Database | `sourcePythonClass` | Driver |
-| --- | --- | --- |
-| Kingbase | `kingbase_connector.kingbase_source.KingbaseSource` | `kingbase8-8.6.0.jar` |
-| Dameng | `dameng_connector.dameng_source.DamengSource` | `DmJdbcDriver8.jar` |
-| Vastbase | `metadata.ingestion.source.database.customdatabase.vastbase_connector.vastbase_source.VastbaseSource` | `Vastbase-G100-2.16_pg_2026062910.jar` |
+| Connector | Service type | `sourcePythonClass` | Driver |
+| --- | --- | --- | --- |
+| Kingbase | `CustomDatabase` | `kingbase_connector.kingbase_source.KingbaseSource` | `kingbase8-8.6.0.jar` |
+| Dameng | `CustomDatabase` | `dameng_connector.dameng_source.DamengSource` | `DmJdbcDriver8.jar` |
+| Vastbase | `CustomDatabase` | `metadata.ingestion.source.database.customdatabase.vastbase_connector.vastbase_source.VastbaseSource` | `Vastbase-G100-2.16_pg_2026062910.jar` |
+| FTP | `CustomDrive` | `ftp_connector.ftp_source.FtpSource` | _(stdlib `ftplib`)_ |
 
 Vendor JARs are not committed. Place the three files under
 `/mnt/lc/open_metadata_2_0_4/extensions/ingestion-2.0.4/drivers/`, or set
@@ -61,15 +62,30 @@ OPENMETADATA_IMAGE_TAG=openmetadata/ingestion:2.0.4-kingbase-dameng-vastbase-cus
 The script layers this extension source and the vendor JARs over
 `docker.getcollate.io/openmetadata/ingestion:2.0.4`; it builds locally and does not push or deploy.
 
-## Add another database
+## FTP (CustomDrive)
+
+OM 2.0.4 has no built-in FTP drive type. The FTP connector mirrors the Kingbase
+pattern on the Drive side:
+
+1. SeaTunnel Web creates a `CustomDrive` service with
+   `sourcePythonClass=ftp_connector.ftp_source.FtpSource`.
+2. Connection fields (`host`, `port`, `username`, `password`, `rootDirectories`,
+   `extractSampleData`, `connectionMode`) go into `connectionOptions`.
+3. The connector lists directories/files through stdlib `ftplib` and optionally
+   extracts CSV/TSV schema + sample rows (same product behaviour as SFTP).
+
+No extra Python dependency or JDBC driver is required for FTP.
+
+## Add another database or drive connector
 
 1. Add its connector package under `connectors/` or
    `python/metadata/ingestion/source/database/customdatabase/`.
 2. Implement the source class and a sibling `connection.py` exposing
    `get_connection`; set `sourcePythonClass` to the fully-qualified source class.
-3. Add its default driver path in `python/sitecustomize.py` and pin new Python
-   dependencies in `requirements.txt`.
-4. Add the vendor driver name to the bundle/image checks and this table.
+3. For databases, add its default driver path in `python/sitecustomize.py` and
+   pin new Python dependencies in `requirements.txt`.
+4. Add the vendor driver name to the bundle/image checks and this table when a
+   JDBC driver is required.
 5. Re-run `package-bundle.sh` to update the bind directory. Rebuilding the image
    is optional; restart ingestion only when the running Python process must
    reload an already imported module.
