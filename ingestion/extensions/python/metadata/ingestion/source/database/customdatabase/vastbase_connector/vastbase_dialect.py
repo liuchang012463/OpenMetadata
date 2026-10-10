@@ -88,9 +88,6 @@ def get_schema_names(self, connection, **kw):
         )
     )
     schemas = [row[0] for row in rows if row[0] not in EXCLUDED_SCHEMAS]
-    current_schema = connection.execute(sql.text("SELECT CURRENT_SCHEMA")).scalar()
-    if current_schema in schemas:
-        return [current_schema]
     return schemas
 
 
