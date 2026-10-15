@@ -160,7 +160,9 @@ def _column_type(data_type, raw_length, precision, scale, udt_name=None):
     if data_type in ("INET", "CIDR", "MACADDR", "MACADDR8"):
         return getattr(pg_types, data_type)()
     if data_type == "UUID":
-        return sqltypes.Uuid()
+        # sqltypes.Uuid renders as CHAR(32) under the default dialect, which
+        # OpenMetadata maps to CHAR; the PostgreSQL UUID type maps to UUID.
+        return pg_types.UUID()
     return sqltypes.NullType()
 
 

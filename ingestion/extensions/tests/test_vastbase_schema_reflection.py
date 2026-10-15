@@ -173,6 +173,12 @@ class VastbaseColumnTypeTest(unittest.TestCase):
 
                 self.assertNotIsInstance(column_type, sqltypes.NullType)
 
+    def test_uuid_maps_to_uuid_not_char(self):
+        column_type = DIALECT_MODULE._column_type("uuid", None, None, None, "uuid")
+
+        self.assertEqual("UUID", str(column_type))
+        self.assertNotIsInstance(column_type, sqltypes.CHAR)
+
     def test_geometric_types_keep_their_postgresql_name(self):
         column_type = DIALECT_MODULE._column_type("point", None, None, None, "point")
 
