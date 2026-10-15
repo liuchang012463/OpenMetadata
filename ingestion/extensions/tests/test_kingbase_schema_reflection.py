@@ -223,6 +223,24 @@ class KingbaseColumnReflectionTest(unittest.TestCase):
         self.assertIn("format_type", statement)
         self.assertIn("c.udt_name", statement)
 
+    def test_get_columns_exposes_the_database_type_spelling(self):
+        connection = FakeConnection(REPORTED_TABLE_ROWS)
+
+        columns = kingbase_dialect.KingbaseDialect().get_columns(
+            connection, "T_ZTSJ_JX_JZ_YK", "public"
+        )
+
+        self.assertEqual(
+            [
+                "character varying(32 byte)",
+                "character varying(32 byte)",
+                "character varying(200 byte)",
+                "numeric(1,0)",
+                "timestamp(6) without time zone",
+            ],
+            [column["display_type"] for column in columns],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

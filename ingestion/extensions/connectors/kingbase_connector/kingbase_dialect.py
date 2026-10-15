@@ -133,6 +133,11 @@ def get_columns(self, connection, table_name, schema=None, **kw):
                 "default": row[6],
                 "autoincrement": False,
                 "comment": row[10],
+                # OpenMetadata builds dataTypeDisplay from the SQLAlchemy type,
+                # which renders "varchar(32)" for a "character varying(32 byte)"
+                # column.  Expose format_type() so the UI shows the type the
+                # database itself reports, the way the ClickHouse connector does.
+                "display_type": row[9],
             }
         )
     return columns
