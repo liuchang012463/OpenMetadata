@@ -87,15 +87,20 @@ def get_view_names(self, connection, schema=None, **kw):
 
 @reflection.cache
 def get_columns(self, connection, table_name, schema=None, **kw):
-    query = """SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
-                      DATA_SCALE, NULLABLE, COLUMN_ID, DATA_DEFAULT
-               FROM ALL_TAB_COLUMNS
-               WHERE TABLE_NAME = :table"""
+    query = """SELECT c.COLUMN_NAME, c.DATA_TYPE, c.DATA_LENGTH, c.DATA_PRECISION,
+                      c.DATA_SCALE, c.NULLABLE, c.COLUMN_ID, c.DATA_DEFAULT,
+                      cc.COMMENTS
+               FROM ALL_TAB_COLUMNS c
+               LEFT JOIN ALL_COL_COMMENTS cc
+                      ON cc.OWNER = c.OWNER
+                     AND cc.TABLE_NAME = c.TABLE_NAME
+                     AND cc.COLUMN_NAME = c.COLUMN_NAME
+               WHERE c.TABLE_NAME = :table"""
     params = {"table": table_name.upper()}
     if schema:
-        query += " AND OWNER = :schema"
+        query += " AND c.OWNER = :schema"
         params["schema"] = schema.upper()
-    query += " ORDER BY COLUMN_ID"
+    query += " ORDER BY c.COLUMN_ID"
     rows = connection.execute(sql.text(query), params)
     columns = []
     for row in rows:
@@ -107,7 +112,8 @@ def get_columns(self, connection, table_name, schema=None, **kw):
                 "nullable": row[5] == "Y",
                 "default": row[7],
                 "autoincrement": False,
-                "comment": None,
+                "comment": row[8],
+                "ordinalPosition": row[6],
             }
         )
     return columns
