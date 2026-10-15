@@ -13,10 +13,12 @@
 """Small SQLAlchemy dialect used by the 2.0.4 CommonDbSourceService."""
 
 from sqlalchemy import sql
+from sqlalchemy.dialects import postgresql as pg_types
 from sqlalchemy.dialects import registry
 from sqlalchemy.engine import reflection
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.sql import sqltypes
+from sqlalchemy.types import UserDefinedType
 
 EXCLUDED_SCHEMAS = frozenset(
     {
@@ -35,8 +37,71 @@ EXCLUDED_SCHEMAS = frozenset(
     }
 )
 
+# PostgreSQL object-identifier types: unsigned 32-bit integers that the
+# catalog reports under their own names.
+_OID_TYPES = frozenset(
+    {
+        "OID",
+        "XID",
+        "CID",
+        "REGCLASS",
+        "REGTYPE",
+        "REGPROC",
+        "REGPROCEDURE",
+        "REGOPER",
+        "REGOPERATOR",
+        "REGNAMESPACE",
+        "REGCONFIG",
+        "REGDICTIONARY",
+    }
+)
 
-def _column_type(data_type, raw_length, precision, scale):
+# Geometric and XML types have no SQLAlchemy generic equivalent, so they are
+# rendered under their PostgreSQL name; OpenMetadata resolves that name
+# through the same _SOURCE_TYPE_TO_OM_TYPE table it uses for native PostgreSQL
+# (POINT -> GEOMETRY, XML -> XML).
+_NAMED_TYPES = frozenset(
+    {"XML", "POINT", "LINE", "LSEG", "BOX", "PATH", "POLYGON", "CIRCLE"}
+)
+
+_ARRAY_ELEMENT_TYPES = {
+    "int2": sqltypes.SMALLINT,
+    "int4": sqltypes.INTEGER,
+    "int8": sqltypes.BIGINT,
+    "float4": sqltypes.REAL,
+    "float8": sqltypes.FLOAT,
+    "numeric": sqltypes.NUMERIC,
+    "bool": sqltypes.BOOLEAN,
+    "text": sqltypes.TEXT,
+    "varchar": sqltypes.VARCHAR,
+    "bpchar": sqltypes.CHAR,
+    "name": sqltypes.String,
+    "date": sqltypes.DATE,
+    "timestamp": sqltypes.DATETIME,
+    "timestamptz": sqltypes.TIMESTAMP,
+    "time": sqltypes.TIME,
+    "timetz": sqltypes.TIME,
+    "uuid": sqltypes.Uuid,
+    "json": sqltypes.JSON,
+    "jsonb": sqltypes.JSON,
+    "bytea": sqltypes.BLOB,
+}
+
+
+class _PostgresNamedType(UserDefinedType):
+    """Renders a fixed type name for OpenMetadata's name-based lookup."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def get_col_spec(self, **kw):
+        return self.name
+
+    def __str__(self):
+        return self.name
+
+
+def _column_type(data_type, raw_length, precision, scale, udt_name=None):
     data_type = str(data_type).upper()
     length = int(raw_length) if raw_length is not None else None
     if data_type in ("INTEGER", "INT", "SERIAL"):
@@ -49,28 +114,51 @@ def _column_type(data_type, raw_length, precision, scale):
         return sqltypes.VARCHAR(length=length)
     if data_type in ("CHAR", "CHARACTER"):
         return sqltypes.CHAR(length=length)
+    if data_type == "NAME":
+        return sqltypes.String(length=length)
+    if data_type in _OID_TYPES:
+        return sqltypes.BIGINT()
+    if data_type in _NAMED_TYPES:
+        return _PostgresNamedType(data_type)
+    if data_type == "ARRAY":
+        element = _ARRAY_ELEMENT_TYPES.get(str(udt_name or "").lstrip("_").lower())
+        return sqltypes.ARRAY(element()) if element else sqltypes.NullType()
     if data_type in ("FLOAT", "DOUBLE", "DOUBLE PRECISION"):
         return sqltypes.FLOAT()
     if data_type == "REAL":
         return sqltypes.REAL()
     if data_type in ("DECIMAL", "NUMERIC", "NUMBER"):
         return sqltypes.NUMERIC(precision=precision, scale=scale)
+    if data_type == "MONEY":
+        return sqltypes.NUMERIC()
     if data_type == "DATE":
         return sqltypes.DATE()
     if data_type in ("TIMESTAMP", "TIMESTAMP WITHOUT TIME ZONE", "DATETIME"):
         return sqltypes.DATETIME()
     if data_type in ("TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ"):
         return sqltypes.TIMESTAMP()
-    if data_type == "TIME":
+    if data_type in ("TIME", "TIME WITHOUT TIME ZONE"):
         return sqltypes.TIME()
+    if data_type in ("TIME WITH TIME ZONE", "TIMETZ"):
+        return pg_types.TIME(timezone=True)
+    if data_type in ("INTERVAL",):
+        return pg_types.INTERVAL()
     if data_type in ("BOOLEAN", "BOOL", "BIT"):
         return sqltypes.BOOLEAN()
+    if data_type in ("BIT VARYING", "VARBIT"):
+        return pg_types.BIT(varying=True)
     if data_type in ("BYTEA", "BLOB"):
         return sqltypes.BLOB()
     if data_type in ("TEXT", "CLOB"):
         return sqltypes.TEXT()
     if data_type == "JSON":
         return sqltypes.JSON()
+    if data_type == "JSONB":
+        return pg_types.JSONB()
+    if data_type == "TSVECTOR":
+        return pg_types.TSVECTOR()
+    if data_type in ("INET", "CIDR", "MACADDR", "MACADDR8"):
+        return getattr(pg_types, data_type)()
     if data_type == "UUID":
         return sqltypes.Uuid()
     return sqltypes.NullType()
@@ -121,7 +209,7 @@ def get_columns(self, connection, table_name, schema=None, **kw):
         sql.text(
             "SELECT c.column_name, c.data_type, c.character_maximum_length, "
             "c.numeric_precision, c.numeric_scale, c.is_nullable, "
-            "c.column_default, c.ordinal_position, "
+            "c.column_default, c.ordinal_position, c.udt_name, "
             "pgd.description AS comment "
             "FROM information_schema.columns c "
             "LEFT JOIN pg_catalog.pg_namespace pn ON pn.nspname = c.table_schema "
@@ -142,11 +230,11 @@ def get_columns(self, connection, table_name, schema=None, **kw):
         columns.append(
             {
                 "name": row[0],
-                "type": _column_type(row[1], row[2], row[3], row[4]),
+                "type": _column_type(row[1], row[2], row[3], row[4], row[8]),
                 "nullable": row[5] == "YES",
                 "default": row[6],
                 "autoincrement": False,
-                "comment": row[8],
+                "comment": row[9],
                 "ordinalPosition": row[7],
             }
         )
