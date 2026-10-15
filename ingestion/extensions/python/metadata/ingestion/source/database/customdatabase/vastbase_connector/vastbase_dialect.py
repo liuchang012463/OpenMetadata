@@ -119,11 +119,21 @@ def get_view_names(self, connection, schema=None, **kw):
 def get_columns(self, connection, table_name, schema=None, **kw):
     rows = connection.execute(
         sql.text(
-            "SELECT column_name, data_type, character_maximum_length, "
-            "numeric_precision, numeric_scale, is_nullable, column_default, "
-            "ordinal_position FROM information_schema.columns "
-            "WHERE table_name = :table AND table_schema = :schema "
-            "ORDER BY ordinal_position"
+            "SELECT c.column_name, c.data_type, c.character_maximum_length, "
+            "c.numeric_precision, c.numeric_scale, c.is_nullable, "
+            "c.column_default, c.ordinal_position, "
+            "pgd.description AS comment "
+            "FROM information_schema.columns c "
+            "LEFT JOIN pg_catalog.pg_namespace pn ON pn.nspname = c.table_schema "
+            "LEFT JOIN pg_catalog.pg_class pc "
+            "ON pc.relnamespace = pn.oid AND pc.relname = c.table_name "
+            "LEFT JOIN pg_catalog.pg_attribute a "
+            "ON a.attrelid = pc.oid AND a.attname = c.column_name "
+            "AND NOT a.attisdropped "
+            "LEFT JOIN pg_catalog.pg_description pgd "
+            "ON pgd.objoid = pc.oid AND pgd.objsubid = a.attnum "
+            "WHERE c.table_name = :table AND c.table_schema = :schema "
+            "ORDER BY c.ordinal_position"
         ),
         {"table": table_name, "schema": schema or "public"},
     )
@@ -136,7 +146,8 @@ def get_columns(self, connection, table_name, schema=None, **kw):
                 "nullable": row[5] == "YES",
                 "default": row[6],
                 "autoincrement": False,
-                "comment": None,
+                "comment": row[8],
+                "ordinalPosition": row[7],
             }
         )
     return columns
@@ -181,7 +192,8 @@ def get_table_comment(self, connection, table_name, schema=None, **kw):
             "SELECT pgd.description FROM pg_catalog.pg_description pgd "
             "JOIN pg_catalog.pg_class pc ON pgd.objoid = pc.oid "
             "JOIN pg_catalog.pg_namespace pn ON pc.relnamespace = pn.oid "
-            "WHERE pc.relname = :table AND pn.nspname = :schema LIMIT 1"
+            "WHERE pc.relname = :table AND pn.nspname = :schema "
+            "AND pgd.objsubid = 0 LIMIT 1"
         ),
         {"table": table_name, "schema": schema or "public"},
     ).fetchone()
