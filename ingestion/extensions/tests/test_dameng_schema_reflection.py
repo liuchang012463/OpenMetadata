@@ -133,5 +133,111 @@ class DamengColumnTypeTest(unittest.TestCase):
         self.assertIsInstance(_col_type("AQ$_SUBSCRIBERS", None, 0), sqltypes.NullType)
 
 
+class DamengConstraintReflectionTest(unittest.TestCase):
+    def test_foreign_keys_are_grouped_per_constraint(self):
+        connection = FakeConnection(
+            other_rows=[
+                ("FK_CHILD_PARENT", "PARENT_ID", "SYSDBA", "ZZ_OM_PARENT", "ID"),
+                ("FK_CHILD_OTHER", "OTHER_ID", "SYSDBA", "ZZ_OM_OTHER", "ID"),
+            ]
+        )
+
+        foreign_keys = dm_dialect.DamengDialect().get_foreign_keys(
+            connection, "ZZ_OM_CHILD", "SYSDBA"
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "name": "FK_CHILD_PARENT",
+                    "constrained_columns": ["PARENT_ID"],
+                    "referred_schema": "SYSDBA",
+                    "referred_table": "ZZ_OM_PARENT",
+                    "referred_columns": ["ID"],
+                },
+                {
+                    "name": "FK_CHILD_OTHER",
+                    "constrained_columns": ["OTHER_ID"],
+                    "referred_schema": "SYSDBA",
+                    "referred_table": "ZZ_OM_OTHER",
+                    "referred_columns": ["ID"],
+                },
+            ],
+            foreign_keys,
+        )
+
+    def test_composite_foreign_key_keeps_column_order(self):
+        connection = FakeConnection(
+            other_rows=[
+                ("FK_COMPOSITE", "A", "SYSDBA", "ZZ_OM_PARENT", "A"),
+                ("FK_COMPOSITE", "B", "SYSDBA", "ZZ_OM_PARENT", "B"),
+            ]
+        )
+
+        foreign_keys = dm_dialect.DamengDialect().get_foreign_keys(
+            connection, "ZZ_OM_CHILD", "SYSDBA"
+        )
+
+        self.assertEqual(1, len(foreign_keys))
+        self.assertEqual(["A", "B"], foreign_keys[0]["constrained_columns"])
+        self.assertEqual(["A", "B"], foreign_keys[0]["referred_columns"])
+
+    def test_unique_constraints_are_grouped_per_constraint(self):
+        connection = FakeConnection(
+            other_rows=[("UQ_CODE", "CODE"), ("UQ_CODE", "TENANT")]
+        )
+
+        unique = dm_dialect.DamengDialect().get_unique_constraints(
+            connection, "ZZ_OM_PARENT", "SYSDBA"
+        )
+
+        self.assertEqual(
+            [{"name": "UQ_CODE", "column_names": ["CODE", "TENANT"]}],
+            unique,
+        )
+
+    def test_indexes_are_reported_one_entry_per_index(self):
+        connection = FakeConnection(
+            other_rows=[
+                ("INDEX1", "UNIQUE", "ID"),
+                ("INDEX2", "NONUNIQUE", "PARENT_ID"),
+                ("IX_TAG", "NONUNIQUE", "TAG"),
+            ]
+        )
+
+        indexes = dm_dialect.DamengDialect().get_indexes(
+            connection, "ZZ_OM_CHILD", "SYSDBA"
+        )
+
+        self.assertEqual(
+            [
+                {"name": "INDEX1", "unique": True, "column_names": ["ID"]},
+                {"name": "INDEX2", "unique": False, "column_names": ["PARENT_ID"]},
+                {"name": "IX_TAG", "unique": False, "column_names": ["TAG"]},
+            ],
+            indexes,
+        )
+
+    def test_primary_key_reports_its_constraint_name(self):
+        connection = FakeConnection(other_rows=[("PK_ZZ_OM_CHILD", "ID")])
+
+        pk = dm_dialect.DamengDialect().get_pk_constraint(
+            connection, "ZZ_OM_CHILD", "SYSDBA"
+        )
+
+        self.assertEqual(
+            {"constrained_columns": ["ID"], "name": "PK_ZZ_OM_CHILD"}, pk
+        )
+
+    def test_primary_key_without_constraint_reports_none(self):
+        connection = FakeConnection(other_rows=[])
+
+        pk = dm_dialect.DamengDialect().get_pk_constraint(
+            connection, "ZZ_OM_CHILD", "SYSDBA"
+        )
+
+        self.assertEqual({"constrained_columns": [], "name": None}, pk)
+
+
 if __name__ == "__main__":
     unittest.main()

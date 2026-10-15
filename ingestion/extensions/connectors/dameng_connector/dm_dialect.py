@@ -209,50 +209,102 @@ def _col_type(data_type, precision, scale, char_length=None, data_length=None):
 
 @reflection.cache
 def get_pk_constraint(self, connection, table_name, schema=None, **kw):
-    query = """SELECT cols.COLUMN_NAME
+    query = """SELECT cons.CONSTRAINT_NAME, cols.COLUMN_NAME
                FROM ALL_CONSTRAINTS cons
                JOIN ALL_CONS_COLUMNS cols ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+                     AND cons.OWNER = cols.OWNER
                WHERE cons.TABLE_NAME = :table AND cons.CONSTRAINT_TYPE = 'P'"""
     params = {"table": table_name.upper()}
     if schema:
         query += " AND cons.OWNER = :schema"
         params["schema"] = schema.upper()
+    query += " ORDER BY cols.POSITION"
     rows = connection.execute(sql.text(query), params)
-    cols = [row[0] for row in rows]
-    return {"constrained_columns": cols, "name": None}
+    rows = list(rows)
+    return {
+        "constrained_columns": [row[1] for row in rows],
+        "name": rows[0][0] if rows else None,
+    }
 
 
 @reflection.cache
 def get_foreign_keys(self, connection, table_name, schema=None, **kw):
-    return []
+    query = """SELECT cons.CONSTRAINT_NAME, cols.COLUMN_NAME, rcons.OWNER,
+                      rcons.TABLE_NAME, rcols.COLUMN_NAME
+               FROM ALL_CONSTRAINTS cons
+               JOIN ALL_CONS_COLUMNS cols ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+                     AND cons.OWNER = cols.OWNER
+               JOIN ALL_CONSTRAINTS rcons ON cons.R_CONSTRAINT_NAME = rcons.CONSTRAINT_NAME
+                     AND rcons.OWNER = cons.R_OWNER
+               JOIN ALL_CONS_COLUMNS rcols ON rcons.CONSTRAINT_NAME = rcols.CONSTRAINT_NAME
+                     AND rcols.OWNER = rcons.OWNER AND rcols.POSITION = cols.POSITION
+               WHERE cons.CONSTRAINT_TYPE = 'R' AND cons.TABLE_NAME = :table"""
+    params = {"table": table_name.upper()}
+    if schema:
+        query += " AND cons.OWNER = :schema"
+        params["schema"] = schema.upper()
+    query += " ORDER BY cons.CONSTRAINT_NAME, cols.POSITION"
+    rows = connection.execute(sql.text(query), params)
+    return [
+        {
+            "name": name,
+            "constrained_columns": [row[1] for row in group],
+            "referred_schema": group[0][2],
+            "referred_table": group[0][3],
+            "referred_columns": [row[4] for row in group],
+        }
+        for name, group in _group_by_name(rows).items()
+    ]
 
 
 @reflection.cache
 def get_indexes(self, connection, table_name, schema=None, **kw):
-    query = """SELECT cols.COLUMN_NAME, ind.UNIQUENESS
-               FROM ALL_IND_COLUMNS cols
-               JOIN ALL_INDEXES ind ON cols.INDEX_NAME = ind.INDEX_NAME
-               WHERE cols.TABLE_NAME = :table"""
+    query = """SELECT ind.INDEX_NAME, ind.UNIQUENESS, cols.COLUMN_NAME
+               FROM ALL_INDEXES ind
+               JOIN ALL_IND_COLUMNS cols ON cols.INDEX_NAME = ind.INDEX_NAME
+                     AND cols.TABLE_OWNER = ind.OWNER
+               WHERE ind.TABLE_NAME = :table"""
     params = {"table": table_name.upper()}
     if schema:
-        query += " AND cols.TABLE_OWNER = :schema"
+        query += " AND ind.OWNER = :schema"
         params["schema"] = schema.upper()
-    query += " ORDER BY cols.COLUMN_POSITION"
+    query += " ORDER BY ind.INDEX_NAME, cols.COLUMN_POSITION"
     rows = connection.execute(sql.text(query), params)
-    cols = []
-    unique = False
-    for row in rows:
-        cols.append(row[0])
-        if row[1] == "UNIQUE":
-            unique = True
-    if cols:
-        return [{"name": None, "unique": unique, "column_names": cols}]
-    return []
+    return [
+        {
+            "name": name,
+            "unique": group[0][1] == "UNIQUE",
+            "column_names": [row[2] for row in group],
+        }
+        for name, group in _group_by_name(rows).items()
+    ]
 
 
 @reflection.cache
 def get_unique_constraints(self, connection, table_name, schema=None, **kw):
-    return []
+    query = """SELECT cons.CONSTRAINT_NAME, cols.COLUMN_NAME
+               FROM ALL_CONSTRAINTS cons
+               JOIN ALL_CONS_COLUMNS cols ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+                     AND cons.OWNER = cols.OWNER
+               WHERE cons.CONSTRAINT_TYPE = 'U' AND cons.TABLE_NAME = :table"""
+    params = {"table": table_name.upper()}
+    if schema:
+        query += " AND cons.OWNER = :schema"
+        params["schema"] = schema.upper()
+    query += " ORDER BY cons.CONSTRAINT_NAME, cols.POSITION"
+    rows = connection.execute(sql.text(query), params)
+    return [
+        {"name": name, "column_names": [row[1] for row in group]}
+        for name, group in _group_by_name(rows).items()
+    ]
+
+
+def _group_by_name(rows):
+    """Fold one row per column into one entry per constraint or index."""
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(row)
+    return grouped
 
 
 @reflection.cache
