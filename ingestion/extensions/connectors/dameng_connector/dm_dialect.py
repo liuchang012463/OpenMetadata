@@ -89,7 +89,7 @@ def get_view_names(self, connection, schema=None, **kw):
 def get_columns(self, connection, table_name, schema=None, **kw):
     query = """SELECT c.COLUMN_NAME, c.DATA_TYPE, c.DATA_LENGTH, c.DATA_PRECISION,
                       c.DATA_SCALE, c.NULLABLE, c.COLUMN_ID, c.DATA_DEFAULT,
-                      cc.COMMENTS
+                      cc.COMMENTS, c.CHAR_LENGTH
                FROM ALL_TAB_COLUMNS c
                LEFT JOIN ALL_COL_COMMENTS cc
                       ON cc.OWNER = c.OWNER
@@ -104,7 +104,9 @@ def get_columns(self, connection, table_name, schema=None, **kw):
     rows = connection.execute(sql.text(query), params)
     columns = []
     for row in rows:
-        col_type = _col_type(row[1], row[3], row[4])
+        col_type = _col_type(
+            row[1], row[3], row[4], char_length=row[9], data_length=row[2]
+        )
         columns.append(
             {
                 "name": row[0],
@@ -119,24 +121,64 @@ def get_columns(self, connection, table_name, schema=None, **kw):
     return columns
 
 
-def _col_type(data_type, precision, scale):
-    t = data_type.upper()
+_CHARACTER_TYPES = frozenset(
+    {
+        "VARCHAR",
+        "VARCHAR2",
+        "CHARACTER VARYING",
+        "CHAR",
+        "CHARACTER",
+        "NCHAR",
+        "NVARCHAR",
+        "NVARCHAR2",
+        "LONGVARCHAR",
+    }
+)
+
+_BINARY_TYPES = frozenset({"BINARY", "VARBINARY", "LONGVARBINARY"})
+
+
+def _to_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _declared_length(data_type, char_length, data_length):
+    """Length to attach to the SQLAlchemy type.
+
+    Dameng reports DATA_LENGTH in *bytes* for the N-types (four bytes per
+    character) and stores the row width there for every other type, so only
+    CHAR_LENGTH carries the declared length of a character column. Binary
+    columns have no character length and use DATA_LENGTH directly.
+    """
+    if data_type in _CHARACTER_TYPES:
+        return _to_int(char_length) or _to_int(data_length)
+    if data_type in _BINARY_TYPES:
+        return _to_int(data_length)
+    return None
+
+
+def _col_type(data_type, precision, scale, char_length=None, data_length=None):
+    t = str(data_type).upper()
+    length = _declared_length(t, char_length, data_length)
     if t in ("INT", "INTEGER"):
         return sqltypes.INTEGER()
     elif t in ("BIGINT",):
         return sqltypes.BIGINT()
-    elif t in ("SMALLINT",):
+    elif t in ("SMALLINT", "BYTE"):
         return sqltypes.SMALLINT()
     elif t in ("TINYINT",):
         return sqltypes.SMALLINT()
-    elif t in ("VARCHAR", "VARCHAR2", "CHARACTER VARYING"):
-        return sqltypes.VARCHAR()
+    elif t in ("VARCHAR", "VARCHAR2", "CHARACTER VARYING", "ROWID", "UROWID"):
+        return sqltypes.VARCHAR(length=length)
     elif t in ("NVARCHAR", "NVARCHAR2"):
-        return sqltypes.NVARCHAR()
+        return sqltypes.NVARCHAR(length=length)
     elif t in ("CHAR", "CHARACTER"):
-        return sqltypes.CHAR()
+        return sqltypes.CHAR(length=length)
     elif t in ("NCHAR",):
-        return sqltypes.NCHAR()
+        return sqltypes.NCHAR(length=length)
     elif t in ("FLOAT",):
         return sqltypes.FLOAT()
     elif t in ("DOUBLE", "DOUBLE PRECISION"):
@@ -144,7 +186,7 @@ def _col_type(data_type, precision, scale):
     elif t in ("REAL",):
         return sqltypes.REAL()
     elif t in ("DEC", "DECIMAL", "NUMERIC", "NUMBER"):
-        return sqltypes.NUMERIC()
+        return sqltypes.NUMERIC(precision=precision, scale=scale)
     elif t in ("DATE",):
         return sqltypes.DATE()
     elif t in ("TIMESTAMP", "DATETIME"):
@@ -155,8 +197,10 @@ def _col_type(data_type, precision, scale):
         return sqltypes.BLOB()
     elif t in ("CLOB", "TEXT", "LONG"):
         return sqltypes.TEXT()
-    elif t in ("BINARY", "VARBINARY"):
-        return sqltypes.VARBINARY()
+    elif t in ("BINARY",):
+        return sqltypes.BINARY(length=length)
+    elif t in ("VARBINARY",):
+        return sqltypes.VARBINARY(length=length)
     elif t in ("BIT", "BOOLEAN"):
         return sqltypes.BOOLEAN()
     else:
