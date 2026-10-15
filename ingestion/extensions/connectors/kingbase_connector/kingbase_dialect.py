@@ -62,6 +62,16 @@ def _parse_kingbase_length(raw: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _parse_kingbase_format_length(formatted_type: str | None) -> int | None:
+    """Length out of a format_type() rendering such as
+    "character varying(32 byte)". Returns None when the rendering carries no
+    length, e.g. "varchar" or "text"."""
+    if formatted_type is None:
+        return None
+    m = re.search(r"\(\s*(\d+)", str(formatted_type))
+    return int(m.group(1)) if m else None
+
+
 @reflection.cache
 def get_schema_names(self, connection, **kw):
     rows = connection.execute(
@@ -92,37 +102,63 @@ def get_view_names(self, connection, schema=None, **kw):
 @reflection.cache
 def get_columns(self, connection, table_name, schema=None, **kw):
     query = """
-        SELECT column_name, data_type, character_maximum_length,
-               numeric_precision, numeric_scale, is_nullable,
-               column_default, ordinal_position
-        FROM information_schema.columns
-        WHERE table_name = :table AND table_schema = :schema
-        ORDER BY ordinal_position
+        SELECT c.column_name, c.data_type, c.character_maximum_length,
+               c.numeric_precision, c.numeric_scale, c.is_nullable,
+               c.column_default, c.ordinal_position, c.udt_name,
+               format_type(a.atttypid, a.atttypmod) AS formatted_type,
+               pgd.description AS comment
+        FROM information_schema.columns c
+        LEFT JOIN pg_catalog.pg_namespace pn
+               ON pn.nspname = c.table_schema
+        LEFT JOIN pg_catalog.pg_class pc
+               ON pc.relnamespace = pn.oid AND pc.relname = c.table_name
+        LEFT JOIN pg_catalog.pg_attribute a
+               ON a.attrelid = pc.oid
+              AND a.attname = c.column_name
+              AND NOT a.attisdropped
+        LEFT JOIN pg_catalog.pg_description pgd
+               ON pgd.objoid = pc.oid AND pgd.objsubid = a.attnum
+        WHERE c.table_name = :table AND c.table_schema = :schema
+        ORDER BY c.ordinal_position
     """
     params = {"table": table_name, "schema": schema or "public"}
     rows = connection.execute(sql.text(query), params)
     columns = []
     for row in rows:
-        raw_len = row[2]
-        precision = row[3]
-        scale = row[4]
-        col_type = _col_type(row[1], raw_len, precision, scale)
         columns.append(
             {
                 "name": row[0],
-                "type": col_type,
+                "type": _col_type(row[1], row[2], row[3], row[4], row[8], row[9]),
                 "nullable": row[5] == "YES",
                 "default": row[6],
                 "autoincrement": False,
-                "comment": None,
+                "comment": row[10],
             }
         )
     return columns
 
 
-def _col_type(data_type, raw_length, precision, scale):
-    t = data_type.upper()
+def _col_type(data_type, raw_length, precision, scale, udt_name=None, formatted_type=None):
+    t = str(data_type).strip().upper()
+    udt = str(udt_name).strip().lower() if udt_name is not None else ""
     parsed_len = _parse_kingbase_length(raw_length)
+    if parsed_len is None:
+        parsed_len = _parse_kingbase_format_length(formatted_type)
+
+    if t == "USER-DEFINED":
+        # KingbaseES Oracle mode reports byte-semantics strings declared as
+        # (n BYTE) as USER-DEFINED with udt_name varcharbyte / bpcharbyte and
+        # no character_maximum_length; only format_type() carries the length.
+        if udt == "varcharbyte":
+            return sqltypes.VARCHAR(length=parsed_len)
+        if udt == "bpcharbyte":
+            return sqltypes.CHAR(length=parsed_len)
+        formatted = str(formatted_type).strip().lower() if formatted_type else ""
+        if formatted.startswith(("character varying", "varchar", "nvarchar")):
+            return sqltypes.VARCHAR(length=parsed_len)
+        if formatted.startswith(("character", "char", "bpchar")):
+            return sqltypes.CHAR(length=parsed_len)
+        return sqltypes.NullType()
 
     if t in ("INTEGER", "INT", "SERIAL"):
         return sqltypes.INTEGER()
@@ -132,11 +168,11 @@ def _col_type(data_type, raw_length, precision, scale):
         return sqltypes.SMALLINT()
     elif t == "TINYINT":
         return sqltypes.SMALLINT()
-    elif t in ("VARCHAR", "CHARACTER VARYING"):
+    elif t in ("VARCHAR", "CHARACTER VARYING", "VARCHAR2"):
         return sqltypes.VARCHAR(length=parsed_len)
-    elif t in ("NVARCHAR",):
+    elif t in ("NVARCHAR", "NVARCHAR2"):
         return sqltypes.NVARCHAR(length=parsed_len)
-    elif t in ("CHAR", "CHARACTER"):
+    elif t in ("CHAR", "CHARACTER", "BPCHAR"):
         return sqltypes.CHAR(length=parsed_len)
     elif t in ("NCHAR",):
         return sqltypes.NCHAR(length=parsed_len)
@@ -154,7 +190,7 @@ def _col_type(data_type, raw_length, precision, scale):
         return sqltypes.DATETIME()
     elif t in ("TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ"):
         return sqltypes.TIMESTAMP()
-    elif t == "TIME":
+    elif t in ("TIME", "TIME WITHOUT TIME ZONE"):
         return sqltypes.TIME()
     elif t in ("BOOLEAN", "BOOL", "BIT"):
         return sqltypes.BOOLEAN()
@@ -226,6 +262,7 @@ def get_table_comment(self, connection, table_name, schema=None, **kw):
         JOIN pg_catalog.pg_class pc ON pgd.objoid = pc.oid
         JOIN pg_catalog.pg_namespace pn ON pc.relnamespace = pn.oid
         WHERE pc.relname = :table AND pn.nspname = :schema
+          AND pgd.objsubid = 0
         LIMIT 1
     """
     params = {"table": table_name, "schema": schema or "public"}
