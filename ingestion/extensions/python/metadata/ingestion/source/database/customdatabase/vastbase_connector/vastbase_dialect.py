@@ -210,7 +210,8 @@ def get_columns(self, connection, table_name, schema=None, **kw):
             "SELECT c.column_name, c.data_type, c.character_maximum_length, "
             "c.numeric_precision, c.numeric_scale, c.is_nullable, "
             "c.column_default, c.ordinal_position, c.udt_name, "
-            "pgd.description AS comment "
+            "pgd.description AS comment, "
+            "format_type(a.atttypid, a.atttypmod) AS formatted_type "
             "FROM information_schema.columns c "
             "LEFT JOIN pg_catalog.pg_namespace pn ON pn.nspname = c.table_schema "
             "LEFT JOIN pg_catalog.pg_class pc "
@@ -236,6 +237,12 @@ def get_columns(self, connection, table_name, schema=None, **kw):
                 "autoincrement": False,
                 "comment": row[9],
                 "ordinalPosition": row[7],
+                # OpenMetadata builds dataTypeDisplay from the SQLAlchemy type,
+                # which renders "varchar(50)" for a "character varying(50)"
+                # column. Expose format_type() so the UI shows the type the
+                # database itself reports, the way the ClickHouse connector
+                # does with its raw type.
+                "display_type": row[10],
             }
         )
     return columns

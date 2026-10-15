@@ -48,16 +48,16 @@ class FakeConnection:
 
 # column_name, data_type, character_maximum_length, numeric_precision,
 # numeric_scale, is_nullable, column_default, ordinal_position, udt_name,
-# comment
+# comment, formatted_type
 COLUMN_ROWS = [
-    ("id", "integer", None, 32, 0, "NO", None, 1, "int4", "主键ID"),
-    ("name", "character varying", 50, None, None, "YES", None, 2, "varchar", "名称"),
-    ("plain", "character varying", 20, None, None, "YES", None, 3, "varchar", None),
-    ("login", "name", None, None, None, "YES", None, 4, "name", None),
-    ("useroid", "oid", None, None, None, "YES", None, 5, "oid", None),
-    ("payload", "jsonb", None, None, None, "YES", None, 6, "jsonb", None),
-    ("tags", "ARRAY", None, None, None, "YES", None, 7, "_int4", None),
-    ("at", "time without time zone", None, None, None, "YES", None, 8, "time", None),
+    ("id", "integer", None, 32, 0, "NO", None, 1, "int4", "主键ID", "integer"),
+    ("name", "character varying", 50, None, None, "YES", None, 2, "varchar", "名称", "character varying(50)"),
+    ("plain", "character varying", 20, None, None, "YES", None, 3, "varchar", None, "character varying(20)"),
+    ("login", "name", None, None, None, "YES", None, 4, "name", None, "name"),
+    ("useroid", "oid", None, None, None, "YES", None, 5, "oid", None, "oid"),
+    ("payload", "jsonb", None, None, None, "YES", None, 6, "jsonb", None, "jsonb"),
+    ("tags", "ARRAY", None, None, None, "YES", None, 7, "_int4", None, "integer[]"),
+    ("at", "time without time zone", None, None, None, "YES", None, 8, "time", None, "time without time zone"),
 ]
 
 
@@ -105,6 +105,28 @@ class VastbaseColumnCommentTest(unittest.TestCase):
         statement = connection.statements[0]
         self.assertIn("pg_catalog.pg_description", statement)
         self.assertIn("pgd.objsubid = a.attnum", statement)
+
+    def test_get_columns_exposes_the_database_type_spelling(self):
+        connection = FakeConnection(column_rows=COLUMN_ROWS)
+
+        columns = DIALECT_MODULE.VastbaseDialect().get_columns(
+            connection, "t_demo", "public"
+        )
+
+        self.assertEqual(
+            [
+                "integer",
+                "character varying(50)",
+                "character varying(20)",
+                "name",
+                "oid",
+                "jsonb",
+                "integer[]",
+                "time without time zone",
+            ],
+            [column["display_type"] for column in columns],
+        )
+        self.assertNotEqual("varchar(50)", columns[1]["display_type"])
 
     def test_get_columns_keeps_ordinal_position(self):
         connection = FakeConnection(column_rows=COLUMN_ROWS)

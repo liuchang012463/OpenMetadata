@@ -129,6 +129,28 @@ class DamengColumnTypeTest(unittest.TestCase):
         self.assertIsInstance(_col_type("UROWID", None, 0), sqltypes.VARCHAR)
         self.assertIsInstance(_col_type("BYTE", None, 0), sqltypes.SMALLINT)
 
+    def test_display_type_carries_the_declared_size(self):
+        self.assertEqual(
+            "VARCHAR(50)",
+            dm_dialect._display_type("VARCHAR", None, 0, 50, 50),
+        )
+        self.assertEqual(
+            "NCHAR(10)",
+            dm_dialect._display_type("NCHAR", None, 0, 10, 40),
+        )
+        self.assertEqual(
+            "NUMBER(18,4)",
+            dm_dialect._display_type("NUMBER", 18, 4, 0, 22),
+        )
+        self.assertEqual(
+            "BINARY(16)",
+            dm_dialect._display_type("BINARY", None, 0, 0, 16),
+        )
+
+    def test_display_type_leaves_unsized_types_bare(self):
+        self.assertEqual("INT", dm_dialect._display_type("INT", None, 0, 0, 4))
+        self.assertEqual("CLOB", dm_dialect._display_type("CLOB", None, 0, 0, 2147483647))
+
     def test_unknown_type_still_falls_back_to_null_type(self):
         self.assertIsInstance(_col_type("AQ$_SUBSCRIBERS", None, 0), sqltypes.NullType)
 

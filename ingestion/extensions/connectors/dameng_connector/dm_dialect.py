@@ -116,6 +116,13 @@ def get_columns(self, connection, table_name, schema=None, **kw):
                 "autoincrement": False,
                 "comment": row[8],
                 "ordinalPosition": row[6],
+                # OpenMetadata builds dataTypeDisplay from the SQLAlchemy type,
+                # so a NUMBER(18,4) column would render as "NUMERIC" and a
+                # VARCHAR(50) as "VARCHAR(50)". Expose Dameng's own spelling
+                # instead, the way the ClickHouse connector does.
+                "display_type": _display_type(
+                    row[1], row[3], row[4], row[9], row[2]
+                ),
             }
         )
     return columns
@@ -136,6 +143,8 @@ _CHARACTER_TYPES = frozenset(
 )
 
 _BINARY_TYPES = frozenset({"BINARY", "VARBINARY", "LONGVARBINARY"})
+
+_NUMERIC_TYPES = frozenset({"DEC", "DECIMAL", "NUMERIC", "NUMBER"})
 
 
 def _to_int(value):
@@ -158,6 +167,17 @@ def _declared_length(data_type, char_length, data_length):
     if data_type in _BINARY_TYPES:
         return _to_int(data_length)
     return None
+
+
+def _display_type(data_type, precision, scale, char_length, data_length):
+    """Dameng's own spelling of the column type, with its declared size."""
+    name = str(data_type)
+    length = _declared_length(name.upper(), char_length, data_length)
+    if length:
+        return f"{name}({length})"
+    if name.upper() in _NUMERIC_TYPES and precision is not None:
+        return f"{name}({precision},{_to_int(scale) or 0})"
+    return name
 
 
 def _col_type(data_type, precision, scale, char_length=None, data_length=None):
